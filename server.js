@@ -7,6 +7,7 @@ const server = require('http').createServer(app);
 const io = require("socket.io")(server);
 const path = require("path");
 var db = require("./models");
+var sequelize = require("./models");
 
 
 var PORT = process.env.PORT || 3001;
