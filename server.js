@@ -1,6 +1,7 @@
 require("dotenv").config();
 var express = require("express");
 var session = require('express-session');
+var SequelizeStore = require("connect-session-sequelize")(session.Store);
 var app = express();
 const server = require('http').createServer(app);
 const io = require("socket.io")(server);
@@ -82,11 +83,15 @@ if (process.env.NODE_ENV === "production") {
 
 app.use(session({
   secret: process.env.sessionSecret,
-  resave: true,
+  // resave: true,
   saveUninitialized: true,
   cookie: {
     maxAge: 100 * 365 * 24 * 60 * 60 * 1000
-  }
+  },
+  store: new SequelizeStore({
+    db: sequelize,
+  }),
+  resave: false, // we support the touch method so per the express-session docs this should be set to false
 }));
 
 // Routes
