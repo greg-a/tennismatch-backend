@@ -3,6 +3,7 @@ var db = require("../models");
 var crypto = require('crypto');
 const { Sequelize, sequelize } = require("../models");
 const Op = Sequelize.Op;
+const nodemailer = require('nodemailer');
 
 module.exports = function (app) {
     // login in auth
@@ -609,6 +610,139 @@ module.exports = function (app) {
             })
         } else {
             res.status(400).end();
+        }
+    });
+
+    // PASSWORD RESET ROUTES
+
+    // CREATES TOKEN IN DB AND SENDS EMAIL
+    app.post("/api/forgot-password"), async (req, res, next) => {
+        const transport = nodemailer.createTransport({
+            host: process.env.EMAIL_HOST,
+            port: process.env.EMAIL_PORT,
+            secure: false,
+            auth: {
+                user: process.env.EMAIL_USER,
+                pass: process.env.EMAIL_PASS
+            }
+        });
+
+        const email = await db.User.findOne({ where: { email: req.body.email } });
+
+        if (email == null) {
+            return res.json({ status: 'ok' });
+        }
+
+        await db.ResetTokens.update(
+            { used: 1 },
+            { where: { email: req.body.email } }
+        );
+
+        const token = crypto.randomBytes(64).toString('base64');
+
+        const expireDate = new Date();
+        expireDate.setTime(expireDate.getTime() + (1 * 60 * 60 * 1000));
+
+        await db.ResetTokens.create({
+            email: req.body.email,
+            expiration: expireDate,
+            token: token,
+            used: 0
+        });
+
+        const message = {
+            from: process.env.SENDER_ADDRESS,
+            to: req.body.email,
+            subject: process.env.FORGOT_PASS_SUBJECT_LINE,
+            text: 'To reset your password, please click the link below.\n\nhttps://' + process.env.DOMAIN + '/reset-password/' + encodeURIComponent(token) + '/' + req.body.email
+        };
+
+        transport.sendMail(message, (err, info) => {
+            if (err) { console.log(err); }
+            else { console.log(info); }
+        });
+
+        return res.json({ status: 'ok' });
+    };
+
+    // CLEANS UP OLD TOKENS IN DB AND CHECKS CURRENT TOKEN FOR VALID
+    app.get("/api/reset-password", async (req, res, next) => {
+        await db.ResetTokens.destroy({
+            where: {
+                expiration: {
+                    [Op.lt]: Date.now()
+                }
+            }
+        });
+
+        const record = await db.ResetTokens.findOne({
+            where: {
+                [Op.and]: [
+                    { email: req.query.email },
+                    {
+                        expiration: {
+                            [Op.gt]: Date.now()
+                        }
+                    },
+                    { token: decodeURIComponent(req.query.token) },
+                    { used: 0 }
+                ]
+            }
+        });
+
+        if (record == null) {
+            res.status(400).send('tokenExpired');
+        } else {
+            res.status(200).send('showForm');
+        }
+    });
+
+    // VALIDATES NEW PASSWORD, CHECKS TOKEN, AND RESETS USER PASSWORD
+    app.post('/api/reset-password', (req, res) => {
+        const token = decodeURIComponent(req.body.token);
+        const email = req.body.email;
+        const password = req.body.password;
+        const passwordConfirm = req.body.passwordConfirm;
+
+        // Add password test validations 
+
+        if (token && email && password && passwordConfirm) {
+            db.ResetTokens.findOne({
+                where: {
+                    [Op.and]: [
+                        { email: req.query.email },
+                        {
+                            expiration: {
+                                [Op.gt]: Date.now()
+                            }
+                        },
+                        { token: decodeURIComponent(req.query.token) },
+                        { used: 0 }
+                    ]
+                }
+            })
+                .then(results => {
+                    if (results) {
+                        db.ResetTokens.update(
+                            { used: 1 },
+                            { where: { email: req.body.email } }
+                        )
+                        .then(()=>{
+                            var hashed_password = crypto.createHash("sha256").update(password).digest("hex");
+
+                            db.User.update(
+                                {password: hashed_password},
+                                { where: { email: req.body.email }}
+                            )
+                            .then(result => res.json(result))
+                            .catch(err => res.json(err));
+                        })
+                    } else {
+                        res.status(400).send('tokenNotFound');
+                    }
+                })
+        } else {
+            res.status(400).send('formNotComplete');
         }
     });
 
